@@ -1,0 +1,28 @@
+scalacheck-propertym
+Copyright (c) 2026 the scalacheck-propertym contributors
+
+Licensed under the BSD 3-Clause License (see the LICENSE file).
+
+--------------------------------------------------------------------------------
+
+This is a derivative work — a Scala 3 / Cats port of Haskell QuickCheck's
+`Test.QuickCheck.Monadic` module.
+
+Ported from: QuickCheck (https://github.com/nick8325/quickcheck)
+  License: BSD 3-Clause
+  Copyright (c) 2000-2019, Koen Claessen
+  Copyright (c) 2006-2008, Björn Bringert
+  Copyright (c) 2009-2019, Nick Smallbone
+
+The `PropertyM` monad, its runners (`monadic`, `monadicIO`, ...), and combinators
+(`run`, `pick`, `pre`, `wp`, `assert`, `stop`, `monitor`, `forAllM`) are translations
+of the corresponding QuickCheck definitions, adapted to Scala 3 over the Cats
+typeclass hierarchy and cats-effect, with `TestControl`-based runners added.
+
+Built on: ScalaCheck (https://github.com/typelevel/scalacheck)
+  License: BSD 3-Clause
+  Copyright (c) 2007-2021, Rickard Nilsson
+
+The code lives in the `org.scalacheck` package because it depends on ScalaCheck
+internals (`Gen.gen`, `Gen.R#doApply/retrieve/withLabels`, `gen.Unsafe.promote`,
+`Prop.startSeed`). ScalaCheck is a dependency, not vendored here.
