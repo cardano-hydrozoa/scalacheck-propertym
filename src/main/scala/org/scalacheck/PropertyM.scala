@@ -44,7 +44,7 @@ object PropertyM:
       */
     def assert[M[_]](bool: Boolean)(using Monad[M]): PropertyM[M, Unit] = {
         if bool then monadForPropM.pure(())
-        else fail_(Console.RED ++ "Assertion(s) FAILED" ++ Console.RED)
+        else fail_(Console.RED ++ "Assertion(s) FAILED" ++ Console.RESET)
     }
 
     /** Short-circuit execution and fail with the given message.
@@ -258,9 +258,15 @@ object PropertyM:
                 f: A => PropertyM[M, B]
             ): PropertyM[M, B] = fa.bind(f)
 
-            // FIXME: I don't know much about this.
+            // Not stack-safe: `PropertyM` is a CPS layer over `Gen`, which has no trampoline to
+            // hook into, and property bodies are shallow (a handful of `pick`/`run`/`assert`
+            // steps), not deep monadic recursion. A straightforward unfold via `bind` is correct
+            // for that usage and keeps `iterateWhileM`/`whileM`/etc. from hitting `???`.
             override def tailRecM[A, B](a: A)(f: A => PropertyM[M, Either[A, B]]): PropertyM[M, B] =
-                ???
+                f(a).bind {
+                    case Left(a2) => tailRecM(a2)(f)
+                    case Right(b) => pure(b)
+                }
         }
 
 /** The property monad is really a monad transformer that can contain

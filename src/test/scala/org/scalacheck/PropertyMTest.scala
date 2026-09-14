@@ -125,6 +125,19 @@ object PropertyMTest extends Properties("PropertyM") {
         _ <- assert(int1 + int2 == int2 + int1)
     } yield true)
 
+    // Regression guard for the seed-threading in `run` / Unsafe.delay: `delay` bakes in a single
+    // sub-seed, so this checks that generator draws stay INDEPENDENT even when interleaved with
+    // `run`. If the fixed sub-seed collapsed subsequent picks, a/b/c would be identical every case.
+    // Full-range Longs make an accidental collision ~2^-64, so equality here really means seed reuse.
+    val _ = property("picks interleaved with run stay independent") = monadicIO(for {
+        a <- pick[IO, Long](Gen.choose(Long.MinValue, Long.MaxValue))
+        _ <- run(IO.unit)
+        b <- pick[IO, Long](Gen.choose(Long.MinValue, Long.MaxValue))
+        _ <- run(IO.unit)
+        c <- pick[IO, Long](Gen.choose(Long.MinValue, Long.MaxValue))
+        _ <- assert(a != b && b != c && a != c)
+    } yield true)
+
     // This demonstrates what it looks like when we generate multiple arguments. They are reported
     // correctly in the error message.
     val _ = property("multiple arguments generated are put into arguments list") = monadicIO(
@@ -189,6 +202,15 @@ object PropertyMTest extends Properties("PropertyM") {
               _ <- stop[IO, Boolean, Unit](true)
           } yield false // usually this would cause the property to fail, but we called "stop"
         )
+    }
+
+    // `tailRecM` is part of the cats `Monad` instance; it used to be `???`. This drives it through
+    // the monad instance to prove it terminates and returns the right answer (no NotImplementedError).
+    val _ = property("tailRecM terminates and does not throw") = {
+        val M = monadForPropM[IO]
+        monadicIO(M.tailRecM(1000) { n =>
+            if n <= 0 then M.pure(Right(true)) else M.pure(Left(n - 1))
+        })
     }
 
     // Using "pre". This demonstrates that test cases are skipped if the pre-condition isn't satisfied.
