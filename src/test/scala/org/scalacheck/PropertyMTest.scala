@@ -6,6 +6,7 @@ import cats.effect.kernel.Outcome.Succeeded
 import cats.effect.unsafe.implicits.*
 import org.scalacheck.Prop.{False, True, Undecided, collect, propBoolean}
 import org.scalacheck.rng.Seed
+import scala.collection.mutable.ListBuffer
 import scala.concurrent.duration.DurationInt
 import scala.sys.process.*
 
@@ -125,9 +126,10 @@ object PropertyMTest extends Properties("PropertyM") {
         _ <- assert(int1 + int2 == int2 + int1)
     } yield true)
 
-    // Regression guard for the seed-threading in `run` / Unsafe.delay: `delay` bakes in a single
-    // sub-seed, so this checks that generator draws stay INDEPENDENT even when interleaved with
-    // `run`. If the fixed sub-seed collapsed subsequent picks, a/b/c would be identical every case.
+    // Regression guard for seed threading along a single path. Independence comes from `pick`
+    // resuming its continuation at `ra.seed`; `run` must not disturb that. (`Unsafe.delay`'s
+    // captured seed is what makes draws SHARED across the paths of a nondeterministic `M` — see
+    // "generation is shared across nondeterministic paths" — but along one path they must differ.)
     // Full-range Longs make an accidental collision ~2^-64, so equality here really means seed reuse.
     val _ = property("picks interleaved with run stay independent") = monadicIO(for {
         a <- pick(Gen.choose(Long.MinValue, Long.MaxValue))
@@ -265,6 +267,22 @@ object PropertyMTest extends Properties("PropertyM") {
             } yield true
           )
         )
+    }
+
+    // Pins the quantifier order for a nondeterministic `M`: generation is a single pure phase
+    // whose result is shared by every execution path, so `pick` behaves as if hoisted above the
+    // `run` no matter where it is written. See `gen.Unsafe.delay` for why.
+    val _ = property("generation is shared across nondeterministic paths") = {
+        val seen = ListBuffer.empty[(Int, Int)]
+        val props: List[Prop] = monadic1(for {
+            branch <- run(List(1, 2, 3))
+            x <- pick(Gen.choose(0, Int.MaxValue))
+        } yield { seen += ((branch, x)); true })
+            .pureApply(Gen.Parameters.default, Seed(7))
+
+        (props.length == 3) :| "one Prop per path" &&
+        (seen.map(_._1).toList == List(1, 2, 3)) :| "every path ran" &&
+        (seen.map(_._2).distinct.length == 1) :| "all paths share a single draw"
     }
 
     // `monadicIO` should catch otherwise-unhandled exceptions and turn them into properties with the Prop.Exception

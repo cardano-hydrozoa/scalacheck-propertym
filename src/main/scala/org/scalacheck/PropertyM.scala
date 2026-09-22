@@ -53,7 +53,12 @@ object PropertyM:
     def fail_[M[_], A](s: String)(using monadM: Monad[M]): PropertyM[M, A] =
         stop(s |: false)
 
-    // FIXME: Error messages appear to be reported in reverse chronological order?
+    // `monitor`-based messages (`assertWith`, `stop`) come out innermost-first, i.e. reversed:
+    // `monitor` decorates the *continuation*, so the outermost wrapper is applied last, and
+    // `Prop.Result.label` accumulates into a `Set[String]` that `Pretty` renders with `mkString`.
+    // Up to four labels that is insertion order and reads as reverse-chronological; from five on
+    // the set becomes a `HashSet` and the order is arbitrary. `Result.args` is the only ordered
+    // channel (a `List`), which is what `pick` already uses.
 
     /** Stop execution by short-circuiting and exiting with this prop
       */
@@ -249,9 +254,16 @@ object PropertyM:
             ): PropertyM[M, B] = fa.flatMap(f)
 
             // Not stack-safe: `PropertyM` is a CPS layer over `Gen`, which has no trampoline to
-            // hook into, and property bodies are shallow (a handful of `pick`/`run`/`assert`
-            // steps), not deep monadic recursion. A straightforward unfold via `flatMap` is
-            // correct for that usage and keeps `iterateWhileM`/`whileM`/etc. from hitting `???`.
+            // hook into, so this overflows at ~1500 steps on a 1 MiB stack. Property bodies are
+            // shallow (a handful of `pick`/`run`/`assert` steps), not deep monadic recursion, so a
+            // straightforward unfold via `flatMap` is correct for that usage and keeps
+            // `iterateWhileM`/`whileM`/etc. from hitting `???`.
+            //
+            // Rebuilding on `cats.data.ContT` does not help: `ContT.tailRecM` suspends its
+            // recursion in `Defer[M]` and never calls `Monad[M].tailRecM`, so ScalaCheck's
+            // stack-safe `Gen.tailRecM` is off the path — and a lawful `Defer[Gen]` is
+            // unimplementable, since flattening nested defers needs a reifiable node (cf.
+            // `Eval.Defer`) and `Gen` is sealed with only opaque `Gen.gen` available.
             override def tailRecM[A, B](a: A)(f: A => PropertyM[M, Either[A, B]]): PropertyM[M, B] =
                 f(a).flatMap {
                     case Left(a2) => tailRecM(a2)(f)
