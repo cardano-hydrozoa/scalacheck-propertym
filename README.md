@@ -18,19 +18,23 @@ QuickCheck's monadic do-notation:
 
 ```scala
 import cats.effect.IO
+import cats.effect.unsafe.implicits.*
 import org.scalacheck.{Arbitrary, Gen, Properties}
 import org.scalacheck.PropertyM.*
 
 object AdditionSpec extends Properties("Addition"):
     property("commutativity, with IO in between") = monadicIO(
       for {
-          a <- pick[IO, Int](Arbitrary.arbitrary[Int])
+          a <- pick(Arbitrary.arbitrary[Int])
           _ <- run(IO.println("some IO between generators"))
-          b <- pick[IO, Int](Arbitrary.arbitrary[Int])
+          b <- pick(Arbitrary.arbitrary[Int])
           _ <- assert(a + b == b + a)
       } yield true
     )
 ```
+
+`M` is inferred inside the for-comprehension — `PropertyM`'s `map`/`flatMap` are members rather
+than cats syntax, so `M` stays open until the enclosing runner pins it down.
 
 Testing time on a virtual clock with `TestControl`:
 
@@ -53,7 +57,7 @@ and depend on a release tag:
 
 ```scala
 resolvers += "jitpack" at "https://jitpack.io"
-libraryDependencies += "com.github.cardano-hydrozoa" % "scalacheck-propertym" % "0.1.0" % Test
+libraryDependencies += "com.github.cardano-hydrozoa" % "scalacheck-propertym" % "0.2.0" % Test
 ```
 
 Note the **single `%`**: JitPack re-serves the built `scalacheck-propertym_3` artifact under the repo

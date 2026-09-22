@@ -1,7 +1,8 @@
 package org.scalacheck
 
 import cats.*
-import cats.effect.IO
+import cats.effect.{IO, MonadCancelThrow}
+import cats.effect.syntax.all.*
 import cats.effect.testkit.TestControl
 import cats.effect.unsafe.IORuntime
 import cats.effect.unsafe.implicits.*
@@ -65,8 +66,6 @@ object PropertyM:
       */
     def monitor[M[_]](f: Prop => Prop)(using monadM: Monad[M]): PropertyM[M, Unit] =
         PropertyM(k => k(()).map((m: M[Prop]) => m.map(f)))
-
-    // -- should be called lift?
 
     /** Tests preconditions. Unlike 'assert' this does not cause the property to fail, rather it
       * discards them just like using the implication combinator 'Test.QuickCheck.Property.==>'.
@@ -136,24 +135,23 @@ object PropertyM:
     }
 
     /** Bracket a [[cats.effect.Resource]] around a [[PropertyM]] body. Acquires the resource inside
-      * [[cats.effect.IO.uncancelable]], polls the body so it remains cancelable, and guarantees
-      * release on success, failure, or cancellation — matching `Resource.use` semantics.
+      * [[MonadCancelThrow.uncancelable]], polls the body so it remains cancelable, and guarantees
+      * release on success, failure, or cancellation — matching [[Resource.use]] semantics.
       */
-    def useResource[R, A](r: cats.effect.Resource[cats.effect.IO, R])(
-        body: R => PropertyM[cats.effect.IO, A]
-    )(using @scala.annotation.unused toProp: A => Prop): PropertyM[cats.effect.IO, A] = PropertyM {
-        k =>
-            Gen.gen { (p, s) =>
-                val io: cats.effect.IO[Prop] = cats.effect.IO.uncancelable { poll =>
-                    r.allocated.flatMap { case (env, release) =>
-                        body(env).unPropertyM(k).doApply(p, s).retrieve match {
-                            case Some(bodyIo) => poll(bodyIo).guarantee(release)
-                            case None         => release.as(Prop.undecided)
-                        }
+    def useResource[M[_], R, A](r: cats.effect.Resource[M, R])(
+        body: R => PropertyM[M, A]
+    )(using F: MonadCancelThrow[M]): PropertyM[M, A] = PropertyM { k =>
+        Gen.gen { (p, s) =>
+            val m: M[Prop] = F.uncancelable { poll =>
+                r.allocated.flatMap { case (env, release) =>
+                    body(env).unPropertyM(k).doApply(p, s).retrieve match {
+                        case Some(bodyM) => poll(bodyM).guarantee(release)
+                        case None        => release.as(Prop.undecided)
                     }
                 }
-                Gen.r(Some(io), s.next)
             }
+            Gen.r(Some(m), s.next)
+        }
     }
 
     // ===================================
@@ -219,12 +217,6 @@ object PropertyM:
             })
         Prop.secure(testableGenProp(monadic1(m).map(runner)))
     }
-    /*
-
-    monadic :: (Testable a, Monad m) => (m Property -> Property) -> PropertyM m a -> Property
-    monadic runner m = property (fmap runner (monadic' m))
-
-     */
 
     def monadic1[M[_], A](
         m: => PropertyM[M, A]
@@ -235,154 +227,53 @@ object PropertyM:
     // Type class stuff
     // ===================================
 
-    // What is the correct way to make these instances available? just as implicit defs?
-
-    implicit def functorForPropM[M[_]]: Functor[[A] =>> PropertyM[M, A]] =
+    given functorForPropM[M[_]]: Functor[[A] =>> PropertyM[M, A]] =
         new Functor[[A] =>> PropertyM[M, A]] {
             override def map[A, B](fa: PropertyM[M, A])(f: A => B): PropertyM[M, B] = fa.map(f)
         }
 
-    implicit def applicativeForPropM[M[_]](using Monad[M]): Applicative[[A] =>> PropertyM[M, A]] =
+    given applicativeForPropM[M[_]]: Applicative[[A] =>> PropertyM[M, A]] =
         new Applicative[[A] =>> PropertyM[M, A]] {
             override def pure[A](x: A): PropertyM[M, A] = PropertyM(k => k(x))
 
             override def ap[A, B](mf: PropertyM[M, A => B])(mx: PropertyM[M, A]): PropertyM[M, B] =
-                mf.bind(f => mx.bind(x => pure(f(x))))
+                mf.flatMap(f => mx.flatMap(x => pure(f(x))))
         }
 
-    implicit def monadForPropM[M[_]](using Monad[M]): Monad[[A] =>> PropertyM[M, A]] =
+    given monadForPropM[M[_]]: Monad[[A] =>> PropertyM[M, A]] =
         new Monad[[A] =>> PropertyM[M, A]] {
             override def pure[A](x: A): PropertyM[M, A] = PropertyM(k => k(x))
 
             override def flatMap[A, B](fa: PropertyM[M, A])(
                 f: A => PropertyM[M, B]
-            ): PropertyM[M, B] = fa.bind(f)
+            ): PropertyM[M, B] = fa.flatMap(f)
 
             // Not stack-safe: `PropertyM` is a CPS layer over `Gen`, which has no trampoline to
             // hook into, and property bodies are shallow (a handful of `pick`/`run`/`assert`
-            // steps), not deep monadic recursion. A straightforward unfold via `bind` is correct
-            // for that usage and keeps `iterateWhileM`/`whileM`/etc. from hitting `???`.
+            // steps), not deep monadic recursion. A straightforward unfold via `flatMap` is
+            // correct for that usage and keeps `iterateWhileM`/`whileM`/etc. from hitting `???`.
             override def tailRecM[A, B](a: A)(f: A => PropertyM[M, Either[A, B]]): PropertyM[M, B] =
-                f(a).bind {
+                f(a).flatMap {
                     case Left(a2) => tailRecM(a2)(f)
                     case Right(b) => pure(b)
                 }
         }
 
-/** The property monad is really a monad transformer that can contain
-  * monadic computations in the monad @m@ it is parameterized by:
+/** The property monad is really a monad transformer that can contain monadic computations in the
+  * monad `M` it is parameterized by. Elements of `PropertyM[M, A]` may mix property operations and
+  * `M`-computations.
   *
-  * @m@ - the @m@-computations that may be performed within @PropertyM@
-  *
-  *     Elements of @PropertyM m a@ may mix property operations and @m@-computations.
+  * @tparam M
+  *   the `M`-computations that may be performed within `PropertyM`
+  * @tparam A
+  *   the value this step produces — what the continuation is handed. The continuation itself always
+  *   returns `Gen[M[Prop]]`.
   */
-case class PropertyM[M[_], A](unPropertyM: (A => Gen[M[Prop]]) => Gen[M[Prop]])(using
-    monad: Monad[M]
-) {
-    def bind[B](f: A => PropertyM[M, B]): PropertyM[M, B] =
+case class PropertyM[M[_], A](unPropertyM: (A => Gen[M[Prop]]) => Gen[M[Prop]]) {
+
+    def flatMap[B](f: A => PropertyM[M, B]): PropertyM[M, B] =
         PropertyM(k => this.unPropertyM(a => f(a).unPropertyM(k)))
 
     def map[B](f: A => B): PropertyM[M, B] =
         PropertyM(unPropertyM = (k: B => Gen[M[Prop]]) => this.unPropertyM((a: A) => k(f(a))))
-
 }
-
-// ===================================
-// From here on out, its other haskell stuff that we don't currently need. I'm keeping it around for now because
-// I've only barely glanced at it; maybe there's some other stuff in scalacheck/cats that corresponds to this
-// and might be useful
-// ===================================
-
-//#ifndef NO_MONADFAIL
-//instance Monad m => Fail.MonadFail (PropertyM m) where
-//  fail = fail_
-//#endif
-//
-//#ifndef NO_TRANSFORMERS
-//instance MonadTrans PropertyM where
-//  lift = run
-//
-//instance MonadIO m => MonadIO (PropertyM m) where
-//  liftIO = run . liftIO
-//#endif
-
-//#ifndef NO_ST_MONAD
-//-- | Runs the property monad for 'ST'-computations.
-//--
-//-- @
-//-- -- Your mutable sorting algorithm here
-//-- sortST :: Ord a => [a] -> 'Control.Monad.ST.ST' s (MVector s a)
-//-- sortST = 'Data.Vector.thaw' . 'Data.Vector.fromList' . 'Data.List.sort'
-//--
-//-- prop_sortST xs = monadicST $ do
-//--   sorted  \<- run ('Data.Vector.freeze' =<< sortST xs)
-//--   assert ('Data.Vector.toList' sorted == sort xs)
-//-- @
-//--
-//-- >>> quickCheck prop_sortST
-//-- +++ OK, passed 100 tests.
-//--
-//monadicST :: Testable a => (forall s. PropertyM (ST s) a) -> Property
-//monadicST m = property (runSTGen (monadic' m))
-//
-//runSTGen :: (forall s. Gen (ST s a)) -> Gen a
-//runSTGen f = do
-//  Capture eval <- capture
-//  return (runST (eval f))
-//#endif
-//
-//-- Exceptions
-//
-//
-//#ifndef NO_EXCEPTIONS
-//
-//-- | Evaluate the value to Weak Head Normal Form (WHNF) and fail if it does not result in
-//-- an expected exception being thrown.
-//assertException ::
-//     E.Exception exc
-//  => (exc -> Bool) -- ^ Return `True` if that is the exception that was expected
-//  -> a -- ^ Value that should result in an exception, when evaluated to WHNF
-//  -> Property
-//assertException isExc value = assertExceptionIO isExc (return value)
-//
-//
-//-- | Make sure that a specific exception is thrown during an IO action. The result is
-//-- evaluated to WHNF.
-//assertExceptionIO ::
-//     E.Exception exc
-//  => (exc -> Bool) -- ^ Return `True` if that is the exception that was expected
-//  -> IO a -- ^ An action that should throw the expected exception
-//  -> Property
-//assertExceptionIO isExc action =
-//  monadicIO $ do
-//    hasFailed <-
-//      run
-//        (E.catch
-//           (do res <- action
-//               res `seq` return False)
-//           (return . isExc))
-//    assert hasFailed
-//
-//#ifndef NO_DEEPSEQ
-//
-//-- | Same as `assertException`, but evaluate the value to Normal Form (NF) and fail if it
-//-- does not result in an expected exception being thrown.
-//assertDeepException ::
-//     (NFData a, E.Exception exc)
-//  => (exc -> Bool) -- ^ Return True if that is the exception that was expected
-//  -> a -- ^ Value that should result in an exception, when fully evaluated to NF
-//  -> Property
-//assertDeepException isExc value = assertException isExc (rnf value)
-//
-//-- | Make sure that a specific exception is thrown during an IO action. The result is
-//-- evaluated to NF.
-//assertDeepExceptionIO ::
-//     (NFData a, E.Exception exc)
-//  => (exc -> Bool) -- ^ Return True if that is the exception that was expected
-//  -> IO a -- ^ An action that should throw the expected exception
-//  -> Property
-//assertDeepExceptionIO isExc action = assertExceptionIO isExc (fmap rnf action)
-//
-//#endif
-//#endif
-//

@@ -1,9 +1,9 @@
 package org.scalacheck
 
+import cats.Monad
 import cats.effect.IO
 import cats.effect.kernel.Outcome.Succeeded
 import cats.effect.unsafe.implicits.*
-import cats.syntax.all.*
 import org.scalacheck.Prop.{False, True, Undecided, collect, propBoolean}
 import org.scalacheck.rng.Seed
 import scala.concurrent.duration.DurationInt
@@ -118,9 +118,9 @@ object PropertyMTest extends Properties("PropertyM") {
     // - Use of "pick" to avoid nested forAlls; we can bind generated values in the PropertyM monad
     // - That we can do arbitrary effects (IO) in between calls to the generators
     val _ = property("commutativity of integer addition") = monadicIO(for {
-        int1 <- pick[IO, Int](Arbitrary.arbitrary[Int])
+        int1 <- pick(Arbitrary.arbitrary[Int])
         _ <- run(IO.println("Run some IO in between the calls."))
-        int2 <- pick[IO, Int](Arbitrary.arbitrary[Int])
+        int2 <- pick(Arbitrary.arbitrary[Int])
         _ <- run(IO.println(s"($int1, $int2)"))
         _ <- assert(int1 + int2 == int2 + int1)
     } yield true)
@@ -130,11 +130,11 @@ object PropertyMTest extends Properties("PropertyM") {
     // `run`. If the fixed sub-seed collapsed subsequent picks, a/b/c would be identical every case.
     // Full-range Longs make an accidental collision ~2^-64, so equality here really means seed reuse.
     val _ = property("picks interleaved with run stay independent") = monadicIO(for {
-        a <- pick[IO, Long](Gen.choose(Long.MinValue, Long.MaxValue))
+        a <- pick(Gen.choose(Long.MinValue, Long.MaxValue))
         _ <- run(IO.unit)
-        b <- pick[IO, Long](Gen.choose(Long.MinValue, Long.MaxValue))
+        b <- pick(Gen.choose(Long.MinValue, Long.MaxValue))
         _ <- run(IO.unit)
-        c <- pick[IO, Long](Gen.choose(Long.MinValue, Long.MaxValue))
+        c <- pick(Gen.choose(Long.MinValue, Long.MaxValue))
         _ <- assert(a != b && b != c && a != c)
     } yield true)
 
@@ -142,8 +142,8 @@ object PropertyMTest extends Properties("PropertyM") {
     // correctly in the error message.
     val _ = property("multiple arguments generated are put into arguments list") = monadicIO(
       for {
-          _ <- pick[IO, Int](Arbitrary.arbitrary[Int])
-          _ <- pick[IO, String](Gen.asciiPrintableStr)
+          _ <- pick(Arbitrary.arbitrary[Int])
+          _ <- pick(Gen.asciiPrintableStr)
       } yield true
     ).map(failingRes =>
         failingRes.copy(status = if failingRes.args.length == 2 then True else False)
@@ -163,8 +163,8 @@ object PropertyMTest extends Properties("PropertyM") {
     val _ = property("assertWith Example") = shouldFail(
       monadicIO(
         for {
-            _ <- assertWith[IO](true, "My first predicate")
-            _ <- assertWith[IO](true, "My second predicate")
+            _ <- assertWith(true, "My first predicate")
+            _ <- assertWith(true, "My second predicate")
             _ <- assertWith(false, "My third predicate")
         } yield true
       )
@@ -172,7 +172,7 @@ object PropertyMTest extends Properties("PropertyM") {
 
     // Demo: collect the generation statistics for a single generated value
     val _ = property("monitor example 1") = monadicIO(for {
-        e <- pick[IO, Int](Gen.choose(0, 10))
+        e <- pick(Gen.choose(0, 10))
         _ <- monitor(collect(e))
     } yield true)
 
@@ -199,7 +199,7 @@ object PropertyMTest extends Properties("PropertyM") {
     val _ = property("stop example") = {
         monadicIO(
           for {
-              _ <- stop[IO, Boolean, Unit](true)
+              _ <- stop(true)
           } yield false // usually this would cause the property to fail, but we called "stop"
         )
     }
@@ -207,7 +207,7 @@ object PropertyMTest extends Properties("PropertyM") {
     // `tailRecM` is part of the cats `Monad` instance; it used to be `???`. This drives it through
     // the monad instance to prove it terminates and returns the right answer (no NotImplementedError).
     val _ = property("tailRecM terminates and does not throw") = {
-        val M = monadForPropM[IO]
+        val M = summon[Monad[[A] =>> PropertyM[IO, A]]]
         monadicIO(M.tailRecM(1000) { n =>
             if n <= 0 then M.pure(Right(true)) else M.pure(Left(n - 1))
         })
@@ -219,15 +219,15 @@ object PropertyMTest extends Properties("PropertyM") {
     val _ = property("`pre` demo") = {
         monadicIO(
           for {
-              int <- pick[IO, Int](
+              int <- pick(
                 Gen.frequency(
                   (10, Gen.const(0)),
                   (10, Gen.const(1)),
                   (1, Gen.const(2))
                 )
               )
-              _ <- monitor[IO](collect(int))
-              _ <- pre[IO](int % 2 == 0)
+              _ <- monitor(collect(int))
+              _ <- pre(int % 2 == 0)
               // _ <- assert(int == 0) // Uncomment this line if you want to see the number of discarded test cases
           } yield true
         )
@@ -242,13 +242,13 @@ object PropertyMTest extends Properties("PropertyM") {
             undecidedRes.copy(status = if undecidedRes.status == Undecided then True else False)
         )
     }
-    val _ = property("assert[IO](false) should fail") = {
+    val _ = property("assert(false) should fail") = {
         shouldFail(monadicIO(for {
             _ <- assert(false)
         } yield true))
     }
 
-    val _ = property("assert[Either[Any, _]](false) should fail") = {
+    val _ = property("assert(false) over Either[Any, _] should fail") = {
         type EA[A] = Either[Any, A]
 
         // FIXME: Factor out runners for common types
@@ -261,7 +261,7 @@ object PropertyMTest extends Properties("PropertyM") {
           monadic(
             runner,
             for {
-                _ <- assert[EA](false)
+                _ <- assert(false)
             } yield true
           )
         )
@@ -306,8 +306,8 @@ object PropertyMTest extends Properties("PropertyM") {
     val _ = property("labelled generators work with `pick`") = {
         monadicIO(
           for {
-              _ <- pick[IO, Int](Arbitrary.arbitrary[Int].label("Int"))
-              _ <- pick[IO, String](Arbitrary.arbitrary[String].label("String"))
+              _ <- pick(Arbitrary.arbitrary[Int].label("Int"))
+              _ <- pick(Arbitrary.arbitrary[String].label("String"))
           } yield true
         ).map(res => {
             val labels = res.args.map(_.label)
@@ -326,9 +326,9 @@ object PropertyMTest extends Properties("PropertyM") {
     val _ = property("demo: bound values behave deterministically when given a seed") =
         val prop = monadicIO(
           for {
-              int1 <- pick[IO, Int](Arbitrary.arbitrary[Int])
-              int2 <- pick[IO, Int](Arbitrary.arbitrary[Int])
-              int3 <- pick[IO, Int](Arbitrary.arbitrary[Int])
+              int1 <- pick(Arbitrary.arbitrary[Int])
+              int2 <- pick(Arbitrary.arbitrary[Int])
+              int3 <- pick(Arbitrary.arbitrary[Int])
               _ <- run(IO.println(s"$int1 $int2 $int3"))
           } yield true
         )
