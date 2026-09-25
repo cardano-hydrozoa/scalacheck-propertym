@@ -177,10 +177,12 @@ object PropertyM:
     )(using toProp: A => Prop): Prop =
         monadic(
           runner = (ioProp: IO[Prop]) =>
-              (for {
-                  tc <- TestControl.execute(ioProp.map(Prop.secure(_)))
-                  prop <- testControlCallback(tc)
-              } yield prop).unsafeRunSync(),
+              reportEscaped(
+                (for {
+                    tc <- TestControl.execute(ioProp.map(Prop.secure(_)))
+                    prop <- testControlCallback(tc)
+                } yield prop).unsafeRunSync()
+              ),
           m = prop
         )
 
@@ -192,7 +194,7 @@ object PropertyM:
     )(using toProp: A => Prop): Prop =
         monadic(
           runner = (ioProp: IO[Prop]) =>
-              TestControl.executeEmbed(ioProp.map(Prop.secure(_))).unsafeRunSync(),
+              reportEscaped(TestControl.executeEmbed(ioProp.map(Prop.secure(_))).unsafeRunSync()),
           m = prop
         )
 
@@ -204,7 +206,26 @@ object PropertyM:
     )(using toProp: A => Prop, ioRuntime: IORuntime): Prop =
         // NOTE: I'm pretty sure this is what we want -- Prop.secure evaluates its argument only at the time
         // it is actually referenced, so we should be catching the exception here
-        monadic(runner = (ioProp: IO[Prop]) => ioProp.map(Prop.secure(_)).unsafeRunSync(), m = prop)
+        monadic(
+          runner = (ioProp: IO[Prop]) => reportEscaped(ioProp.map(Prop.secure(_)).unsafeRunSync()),
+          m = prop
+        )
+
+    /** Print the stack trace of an exception escaping an IO runner, then rethrow it unchanged.
+      *
+      * sbt's ScalaCheck runner reports a property's exception as one line -- the message alone,
+      * with no frame -- so a property that throws arrives unactionable, and a rare, seed-dependent
+      * one cannot be chased by re-running. The runners are the last place the throwable is in hand.
+      * Rethrowing it unchanged keeps ScalaCheck's own handling as it was: the property still gets
+      * the same [[Prop.Exception]] status.
+      */
+    private def reportEscaped(run: => Prop): Prop =
+        try run
+        catch
+            case t: Throwable =>
+                Console.err.println(s"[PropertyM] exception escaped the property's IO: $t")
+                t.printStackTrace(Console.err)
+                throw t
 
     /** Given an arbitrary monadic runner and a PropertyM, return a Prop */
     def monadic[M[_], A](runner: M[Prop] => Prop, m: => PropertyM[M, A])(using
