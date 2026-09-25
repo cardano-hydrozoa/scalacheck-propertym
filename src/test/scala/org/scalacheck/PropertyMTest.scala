@@ -321,6 +321,30 @@ object PropertyMTest extends Properties("PropertyM") {
         )
     }
 
+    // An exception escaping the property's IO still gets the Prop.Exception status (above), and its
+    // stack trace now reaches stderr: sbt's ScalaCheck runner reports only the message, so without
+    // this a rare failure carries no frame to locate it by.
+    val _ = property("an escaping exception's stack trace reaches stderr, status unchanged") = {
+        val err = new java.io.ByteArrayOutputStream()
+        val result = Console.withErr(new java.io.PrintStream(err, true)) {
+            monadicIO(
+              for {
+                  _ <- run(IO.raiseError[Unit](new IllegalStateException("escaped on purpose")))
+              } yield true
+            ).apply(Gen.Parameters.default)
+        }
+        val printed = err.toString
+        val isException = result.status match {
+            case Prop.Exception(e) => e.getMessage == "escaped on purpose"
+            case _                 => false
+        }
+        (isException :| s"status was ${result.status}") &&
+        (printed.contains("java.lang.IllegalStateException: escaped on purpose") :|
+            s"no exception line on stderr: $printed") &&
+        (printed.linesIterator.exists(_.trim.startsWith("at ")) :|
+            s"no stack frame on stderr: $printed")
+    }
+
     val _ = property("labelled generators work with `pick`") = {
         monadicIO(
           for {
