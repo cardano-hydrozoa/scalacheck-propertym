@@ -9,7 +9,7 @@ ThisBuild / scalaVersion := "3.3.7"
 // Pre-1.0 this follows the Scala ecosystem's "early SemVer": the second number is the breaking
 // slot, so binary-incompatible releases bump `y` in `0.y.z`.
 ThisBuild / organization := "com.github.cardano-hydrozoa"
-ThisBuild / version := "0.2.0"
+ThisBuild / version := "0.2.1"
 
 lazy val root = (project in file("."))
     .settings(

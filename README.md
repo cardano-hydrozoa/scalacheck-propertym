@@ -57,7 +57,7 @@ and depend on a release tag:
 
 ```scala
 resolvers += "jitpack" at "https://jitpack.io"
-libraryDependencies += "com.github.cardano-hydrozoa" % "scalacheck-propertym" % "0.2.0" % Test
+libraryDependencies += "com.github.cardano-hydrozoa" % "scalacheck-propertym" % "0.2.1" % Test
 ```
 
 Note the **single `%`**: JitPack re-serves the built `scalacheck-propertym_3` artifact under the repo
