@@ -16,3 +16,9 @@ project/project/
 
 # AI
 .claude/
+
+# Nix
+/result
+/result-*
+# Written by the dev shell (git-hooks.nix)
+/.pre-commit-config.yaml

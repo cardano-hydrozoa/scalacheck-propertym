@@ -1,0 +1,16 @@
+name: Flake check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # Runs the flake's checks, which include mdreflow over every Markdown file.
+  flake-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      - run: nix flake check
