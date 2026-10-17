@@ -1,0 +1,5 @@
+# Commits that only reformat, skipped by git blame.
+# GitHub reads this file; locally: git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# docs: reformat Markdown with mdreflow
+251db78a112fc410d68a8680ae4db92879df1925
